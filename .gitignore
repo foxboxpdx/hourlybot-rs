@@ -1,0 +1,4 @@
+/target
+/images
+*.statefile
+mastodon-data.toml
