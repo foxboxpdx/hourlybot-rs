@@ -1,17 +1,38 @@
 use tokio_cron_scheduler::{JobScheduler, Job};
 use mastodon_async::{Data, Mastodon, Result, StatusBuilder, Visibility};
 use mastodon_async::helpers::toml;
+use hourlybot_rs::ImageList;
+use clap::Parser;
+
+// Clap struct for command line arguments
+#[derive(Parser)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    /// Base directory to load images from
+    #[clap(short, long)]
+    basedir: String,
+
+    /// Posting Frequency
+    #[clap(value_enum)]
+    freq: Frequency,
+}
+
+// Clap enum for allowed frequency values
+#[derive(clap::ValueEnum, Clone)]
+enum Frequency {
+   TopOfHour,
+   BottomOfHour,
+   OnceDaily,
+   TwiceDaily,
+   FourTimesDaily,
+   SixTimesDaily,
+}
 
 //use std::env;
-use std::path::{PathBuf, Path};
-use std::fs;
-use rand::Rng;
-use std::fs::File;
-use std::io::{BufReader, BufRead};
 
-async fn run() -> Result<()> {
+async fn run(basedir: String) -> Result<()> {
     // Step 1: Build an ImageList
-    let mut images = ImageList::from_dir("images/");
+    let mut images = ImageList::from_dir(&basedir);
 
     // Step 2: Pick a file to post
     let input = images.select();
@@ -35,9 +56,9 @@ async fn run() -> Result<()> {
         .await?;
     println!("media upload available at: {}", media.url);
     let status = StatusBuilder::new()
-        .status("Posted by hourlybot-rs")
+        .status("")
         .media_ids([media.id])
-        .visibility(Visibility::Private)
+        .visibility(Visibility::Public)
         .build()?;
     let status = mastodon.new_status(status).await?;
     println!("successfully uploaded status. It has the ID {}.", status.id);
@@ -46,17 +67,29 @@ async fn run() -> Result<()> {
 
 #[tokio::main]
 async fn main() {
+    let args = Args::parse();
+
+    let freq = match args.freq {
+        Frequency::TopOfHour => "0 0 * * * *",
+        Frequency::BottomOfHour => "0 30 * * * *",
+        Frequency::OnceDaily => "0 0 0 * * *",
+        Frequency::TwiceDaily => "0 0 0,12 * * *",
+        Frequency::FourTimesDaily => "0 0 0,6,12,18 * * *",
+        Frequency::SixTimesDaily => "0 0 0,4,8,12,16,20 * * *" 
+    };
+    let base = args.basedir.clone();
+
     let mut sched = JobScheduler::new().await.expect("Couldn't init scheduler");
 
-    let jja = Job::new_async("0 0 * * * *", move |_uuid, _l| {
+    let jja = Job::new_async(freq, move |_uuid, _l| {
+        let foo = base.clone();
         Box::pin(async move {
-            run().await.unwrap();
+            run(foo).await.unwrap();
         })
     })
     .unwrap();
     sched.add(jja).await.expect("Couldn't add job to scheduler");
   
-
     #[cfg(feature = "signal")]
     sched.shutdown_on_ctrl_c();
 
@@ -68,65 +101,9 @@ async fn main() {
 
     sched.start().await.expect("Couldn't start scheduler");
   
-    // Wait a while so that the jobs actually run
-    tokio::time::sleep(core::time::Duration::from_secs(100)).await;
-}
-
-// A Struct for tracking images and whether something's been used lately
-// This whole thing is super overkill but I couldn't figure out how to 
-// do it all in memory with the JobScheduler thing all movin' data through
-// inner closures or whatever.
-struct ImageList {
-    name: String,
-    filenames: Vec<PathBuf>,
-    used: Vec<String>
-}
-
-impl ImageList {
-    pub fn from_dir(basedir: &str) -> ImageList {
-        let fnames: Vec<PathBuf> = match fs::read_dir(basedir) {
-            Ok(entries) => entries.filter_map(|e| e.ok())
-                .map(|e| e.path()).collect(),
-            Err(e) => {
-                panic!("Error reading dir: {}!\nError was: {}", basedir, e);
-            }
-        };
-        let mut newlist = ImageList {
-            name: "Images".to_string(),
-            filenames: fnames,
-            used: Vec::new()
-        };
-        newlist.state_sync(false);
-        return newlist;
-    }
-
-    pub fn select(&mut self) -> String {
-        if self.filenames.len() - self.used.len() < 2 { self.used.clear(); }
-        let mut rng = rand::thread_rng();
-        loop {
-            let choice: usize = rng.gen_range(0..self.filenames.len());
-            let potential = &self.filenames[choice].to_str().expect("Why").to_string();
-            if !self.used.contains(&potential) {
-                self.used.push(potential.to_string());
-                self.state_sync(true);
-                return potential.to_string();
-            }
-        }
-    }
-
-    pub fn state_sync(&mut self, write: bool) {
-        let statefilename = format!("{}.statefile", self.name);
-        if write {
-            fs::write(statefilename, self.used.join("\n")).expect("Error writing statefile");
-            return;
-        }
-        if Path::new(&statefilename).exists() {
-            let file = File::open(statefilename).expect("Couldn't open statefile for reading");
-            let state: Vec<String> = match BufReader::new(file).lines().collect() {
-                Ok(x) => { x },
-                Err(e) => { panic!("Couldn't read statefile: {}", e); }
-            };
-            self.used = state;
-        }
+    // Now we just sleeploop till killed
+    loop {
+        tokio::time::sleep(core::time::Duration::from_secs(3600)).await;
+        println!("Woke up after an hour, back to sleep.")
     }
 }

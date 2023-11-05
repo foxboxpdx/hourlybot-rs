@@ -1,12 +1,17 @@
 [package]
 name = "hourlybot-rs"
-version = "0.1.73"
+version = "0.2.11"
+authors = ["Fox Box <foxboxpdx@gmail.com>"]
 edition = "2021"
 
 [dependencies]
 tokio-cron-scheduler = "0.9.4"
 toml = "0.8.6"
 rand = "0.8.5"
+
+[dependencies.clap]
+version = "3.2.23"
+features = ["derive"]
 
 [dependencies.mastodon-async]
 version = "1.0"
