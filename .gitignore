@@ -2,3 +2,4 @@
 /images
 *.statefile
 mastodon-data.toml
+/img

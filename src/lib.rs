@@ -3,6 +3,8 @@ use std::fs;
 use rand::Rng;
 use std::fs::File;
 use std::io::{BufReader, BufRead};
+use sha2::{Sha256, Digest};
+use std::collections::HashMap;
 
 // A Struct for tracking images and whether something's been used lately
 // This whole thing is super overkill but I couldn't figure out how to 
@@ -49,7 +51,7 @@ impl ImageList {
     }
 
     pub fn state_sync(&mut self, write: bool) {
-        let statefilename = format!("{}.statefile", self.name);
+        let statefilename = format!("/tmp/{}.statefile", self.name);
         if write {
             fs::write(statefilename, self.used.join("\n")).expect("Error writing statefile");
             return;
@@ -62,5 +64,47 @@ impl ImageList {
             };
             self.used = state;
         }
+    }
+
+    // A really simple deduper that hashes each file and dumps out any with matching hashes
+    // Note: We could reduce the time spent and the number of hashes calculated by grabbing the 
+    // sizes of each file and comparing them first.  Any that match could then be hashed and compared
+    // to see if they are dupes.
+    pub fn simple_dedupe(&self, mark: bool) {
+        println!("Checking for duplicates...({} files)", self.filenames.len());
+        let mut hash_hash: HashMap<String, String> = HashMap::new();
+        let mut dupes = Vec::new();
+
+        // Loop through the list
+        for f in &self.filenames {
+            // God this is ugly
+            let fname = f.file_name().expect("WTF").to_string_lossy().to_string();
+
+            // Create a SHA-256 "hasher"
+            let mut hasher = Sha256::new();
+            let mut file = fs::File::open(&f).expect("Couldn't read file");
+
+            let _bytes_written = std::io::copy(&mut file, &mut hasher).expect("Couldn't read bytes");
+            let hash_bytes = hasher.finalize();
+
+            // The easiest way to see if there's a file with the same hash is to use the hash as the
+            // key in the map.
+            let finalized = format!("{:x}", hash_bytes);
+            if hash_hash.contains_key(&finalized) {
+                dupes.push(format!("{} <=> {}", hash_hash.get(&finalized).unwrap(), &fname));
+                // If the 'mark' bool is set, tack 'dup' on the end of the filenames
+                if mark {
+                    let newname = format!("{}.DUP", f.to_string_lossy());
+                    fs::rename(f, Path::new(&newname)).expect("Couldn't rename duplicate");
+                }
+            }
+
+            // Finalize the hash and stick it in the hash hashmap
+            hash_hash.insert(finalized, fname);
+        }
+        // Now that we're done, sort that dupes vec to make things a little easier and print it
+        dupes.sort();
+        println!("Found {} duplicates.", dupes.len());
+        println!("Done!");
     }
 }

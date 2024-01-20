@@ -1,5 +1,5 @@
 use tokio_cron_scheduler::{JobScheduler, Job};
-use mastodon_async::{Data, Mastodon, Result, StatusBuilder, Visibility};
+use mastodon_async::{Mastodon, Result, StatusBuilder, Visibility};
 use mastodon_async::helpers::toml;
 use hourlybot_rs::ImageList;
 use clap::Parser;
@@ -9,16 +9,28 @@ use clap::Parser;
 #[clap(author, version, about, long_about = None)]
 struct Args {
     /// Base directory to load images from
-    #[clap(short, long)]
+    #[clap(short, long, required = true)]
     basedir: String,
 
-    /// Posting Frequency
-    #[clap(value_enum)]
+    /// How often should the bot post?
+    #[clap(value_enum, required_unless_present("dedupe"))]
     freq: Frequency,
+
+    /// Mastodon configuration file
+    #[clap(short, long, required_unless_present("dedupe"))]
+    config: String,
+
+    /// Run the deduper and exit
+    #[clap(short, long)]
+    dedupe: bool,
+
+    /// When running the deduper, add '.DUP' suffix to suspected duplicates
+    #[clap(short, long)]
+    markdupes: bool,
 }
 
 // Clap enum for allowed frequency values
-#[derive(clap::ValueEnum, Clone)]
+#[derive(clap::ValueEnum, Clone, Debug)]
 enum Frequency {
    TopOfHour,
    BottomOfHour,
@@ -28,40 +40,72 @@ enum Frequency {
    SixTimesDaily,
 }
 
-//use std::env;
-
-async fn run(basedir: String) -> Result<()> {
-    // Step 1: Build an ImageList
+// Perform steps necessary to attach and upload an image, then
+// post a toot pointing to that image.  Try to fail gracefully
+// whenever possible by printing an error and returning.
+async fn run(basedir: String, config: String) -> Result<()> {
+    // Step 1: Build an ImageList.  This should really only
+    // have to happen once per execution but tokio-scheduler is a 
+    // punk bitch.
     let mut images = ImageList::from_dir(&basedir);
 
     // Step 2: Pick a file to post
     let input = images.select();
 
     // Step 3: Build a Mastodon client instance
-    let _data = Data::default();
-    let data = match toml::from_file("mastodon-data.toml") {
+    // This needs to panic on error; if we can't read the
+    // config file, we can't do squat.
+    let data = match toml::from_file(&config) {
         Ok(x) => { x },
-        Err(e) => { panic!("Couldn't read toml file: {}", e); }
+        Err(e) => { panic!("Couldn't read toml config file: {}", e); }
     };
     let mastodon = Mastodon::from(data);
 
+    // If you want there to be a description accompanying the image,
+    // set this to Some(String); otherwise set to None.
     let description = None;
 
-    // set 'input' to the image path (String)
-    // set 'description' to None or Some(String)
+    // Step 4: Try to load the selected image file
+    let attach = match mastodon.media(&input, description).await {
+        Ok(x) => x,
+        Err(e) => { 
+            println!("Error attaching media: {:?}", e);
+            return Ok(());
+        }
+    };
 
-    let media = mastodon.media(input, description).await?;
-    let media = mastodon
-        .wait_for_processing(media, Default::default())
-        .await?;
-    println!("media upload available at: {}", media.url);
-    let status = StatusBuilder::new()
-        .status("")
-        .media_ids([media.id])
-        .visibility(Visibility::Public)
-        .build()?;
-    let status = mastodon.new_status(status).await?;
-    println!("successfully uploaded status. It has the ID {}.", status.id);
+    // Step 5: Wait for the image file to be uploaded and processed
+    let media = match mastodon.wait_for_processing(attach, Default::default()).await {
+        Ok(x) => {
+            println!("Attachment uploaded to: {}", x.url);
+            x
+        },
+        Err(e) => {
+            println!("Error processing attachment: {:?}", e);
+            return Ok(());
+        }
+    };
+
+    // Step 6: Build a NewStatus to post
+    let status = match StatusBuilder::new().status("").media_ids([media.id]).visibility(Visibility::Public).build() {
+        Ok(x) => x,
+        Err(e) => {
+            println!("Error building NewStatus: {:?}", e);
+            return Ok(());
+        }
+    };
+
+    // Step 7: Toot!
+    match mastodon.new_status(status).await {
+        Ok(x) => {
+            println!("Toot successfully posted with id: {}", x.id);
+        },
+        Err(e) => {
+            println!("Error posting toot: {:?}", e);
+        }
+    };
+
+    // Return
     Ok(())
 }
 
@@ -69,6 +113,14 @@ async fn run(basedir: String) -> Result<()> {
 async fn main() {
     let args = Args::parse();
 
+    // Short-circuit if dedupe was specified
+    if args.dedupe {
+        let images = ImageList::from_dir(&args.basedir);
+        images.simple_dedupe(args.markdupes);
+        return;
+    }
+
+    // Set up the cron string based on the specified frequency
     let freq = match args.freq {
         Frequency::TopOfHour => "0 0 * * * *",
         Frequency::BottomOfHour => "0 30 * * * *",
@@ -78,17 +130,23 @@ async fn main() {
         Frequency::SixTimesDaily => "0 0 0,4,8,12,16,20 * * *" 
     };
     let base = args.basedir.clone();
+    let conf = args.config.clone();
+
+    // Startup status
+    println!("hourlybot-rs starting up...");
+    println!("basedir: {}\nfrequency: {:?}\nconfig file: {}", &base, args.freq, &conf);
 
     let mut sched = JobScheduler::new().await.expect("Couldn't init scheduler");
 
-    let jja = Job::new_async(freq, move |_uuid, _l| {
+    let poster = Job::new_async(freq, move |_uuid, _l| {
         let foo = base.clone();
+        let bar = conf.clone();
         Box::pin(async move {
-            run(foo).await.unwrap();
+            run(foo, bar).await.unwrap();
         })
     })
     .unwrap();
-    sched.add(jja).await.expect("Couldn't add job to scheduler");
+    sched.add(poster).await.expect("Couldn't add job to scheduler");
   
     #[cfg(feature = "signal")]
     sched.shutdown_on_ctrl_c();
