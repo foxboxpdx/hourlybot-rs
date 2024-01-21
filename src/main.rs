@@ -1,6 +1,9 @@
+use std::thread::sleep;
+
 use tokio_cron_scheduler::{JobScheduler, Job};
 use mastodon_async::{Mastodon, Result, StatusBuilder, Visibility};
 use mastodon_async::helpers::toml;
+use core::time::Duration;
 use hourlybot_rs::ImageList;
 use clap::Parser;
 
@@ -66,10 +69,36 @@ async fn run(basedir: String, config: String) -> Result<()> {
     let description = None;
 
     // Step 4: Try to load the selected image file
-    let attach = match mastodon.media(&input, description).await {
+    let attach = match mastodon.media(&input, description.clone()).await {
         Ok(x) => x,
         Err(e) => { 
-            println!("Error attaching media: {:?}", e);
+            // I've been seeing a lot of 'temporary problem' 503s in this step, contained in the "Api"
+            // variant of the mastodon_async Error enum.  If we dig in there and confirm it's a 503,
+            // we can try sleeping for 30 seconds and attaching again then letting the result bubble
+            // back up.  If it 503s AGAIN, we should give up for this cycle.
+            match e {
+                mastodon_async::errors::Error::Api{status: s, response: _} => {
+                    if s == 503 {
+                        println!("Got a 503 trying to attach media.  Sleeping 30s to try again.");
+                        sleep(Duration::from_secs(30));
+                        let secondchance = match mastodon.media(&input, description.clone()).await {
+                            Ok(x) => x,
+                            Err(e) => {
+                                println!("Failed a second time, giving up: {:?}", e);
+                                return Ok(());
+                            }
+                        };
+                        secondchance
+                    } else {
+                        println!("Got a non-503 API error trying to attach media:\n{:?}", e);
+                        return Ok(());
+                    }
+                },
+                _ => {
+                    println!("Got an unexpected non-API error trying to attach media:\n{:?}", e);
+                    return Ok(());
+                }
+            };
             return Ok(());
         }
     };
@@ -161,7 +190,7 @@ async fn main() {
   
     // Now we just sleeploop till killed
     loop {
-        tokio::time::sleep(core::time::Duration::from_secs(3600)).await;
+        tokio::time::sleep(Duration::from_secs(3600)).await;
         println!("Woke up after an hour, back to sleep.")
     }
 }
