@@ -17,11 +17,11 @@ struct Args {
 
     /// How often should the bot post?
     #[clap(value_enum, required_unless_present("dedupe"))]
-    freq: Frequency,
+    freq: Option<Frequency>,
 
     /// Mastodon configuration file
     #[clap(short, long, required_unless_present("dedupe"))]
-    config: String,
+    config: Option<String>,
 
     /// Run the deduper and exit
     #[clap(short, long)]
@@ -72,10 +72,6 @@ async fn run(basedir: String, config: String) -> Result<()> {
     let attach = match mastodon.media(&input, description.clone()).await {
         Ok(x) => x,
         Err(e) => { 
-            // I've been seeing a lot of 'temporary problem' 503s in this step, contained in the "Api"
-            // variant of the mastodon_async Error enum.  If we dig in there and confirm it's a 503,
-            // we can try sleeping for 30 seconds and attaching again then letting the result bubble
-            // back up.  If it 503s AGAIN, we should give up for this cycle.
             match e {
                 mastodon_async::errors::Error::Api{status: s, response: _} => {
                     if s == 503 {
@@ -98,8 +94,7 @@ async fn run(basedir: String, config: String) -> Result<()> {
                     println!("Got an unexpected non-API error trying to attach media:\n{:?}", e);
                     return Ok(());
                 }
-            };
-            return Ok(());
+            }
         }
     };
 
@@ -149,8 +144,10 @@ async fn main() {
         return;
     }
 
+    // Unwrap everything
+    let f = args.freq.unwrap();
     // Set up the cron string based on the specified frequency
-    let freq = match args.freq {
+    let freq = match f {
         Frequency::TopOfHour => "0 0 * * * *",
         Frequency::BottomOfHour => "0 30 * * * *",
         Frequency::OnceDaily => "0 0 0 * * *",
@@ -159,11 +156,11 @@ async fn main() {
         Frequency::SixTimesDaily => "0 0 0,4,8,12,16,20 * * *" 
     };
     let base = args.basedir.clone();
-    let conf = args.config.clone();
+    let conf = args.config.unwrap().clone();
 
     // Startup status
     println!("hourlybot-rs starting up...");
-    println!("basedir: {}\nfrequency: {:?}\nconfig file: {}", &base, args.freq, &conf);
+    println!("basedir: {}\nfrequency: {:?}\nconfig file: {}", &base, freq, &conf);
 
     let mut sched = JobScheduler::new().await.expect("Couldn't init scheduler");
 
