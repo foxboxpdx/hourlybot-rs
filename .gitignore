@@ -3,3 +3,5 @@
 *.statefile
 mastodon-data.toml
 /img
+Cargo.lock
+pibuild.sh

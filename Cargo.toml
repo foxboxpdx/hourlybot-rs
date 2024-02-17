@@ -16,7 +16,8 @@ features = ["derive"]
 
 [dependencies.mastodon-async]
 version = "1.0"
-features = ["toml", "mt"]
+default-features = false
+features = ["toml", "mt", "rustls-tls"]
 
 [dependencies.tokio]
 version = "1.22.0"
