@@ -41,6 +41,7 @@ enum Frequency {
    TwiceDaily,
    FourTimesDaily,
    SixTimesDaily,
+   OneShot
 }
 
 // Perform steps necessary to attach and upload an image, then
@@ -135,6 +136,7 @@ async fn run(basedir: String, config: String) -> Result<()> {
 
 #[tokio::main]
 async fn main() {
+    let mut one_and_done = false;
     let args = Args::parse();
 
     // Short-circuit if dedupe was specified
@@ -153,7 +155,8 @@ async fn main() {
         Frequency::OnceDaily => "0 0 0 * * *",
         Frequency::TwiceDaily => "0 0 0,12 * * *",
         Frequency::FourTimesDaily => "0 0 0,6,12,18 * * *",
-        Frequency::SixTimesDaily => "0 0 0,4,8,12,16,20 * * *" 
+        Frequency::SixTimesDaily => "0 0 0,4,8,12,16,20 * * *",
+        Frequency::OneShot => { one_and_done = true; "Post once then exit" }
     };
     let base = args.basedir.clone();
     let conf = args.config.unwrap().clone();
@@ -161,6 +164,12 @@ async fn main() {
     // Startup status
     println!("hourlybot-rs starting up...");
     println!("basedir: {}\nfrequency: {:?}\nconfig file: {}", &base, freq, &conf);
+
+    // Hijack execution if OneShot is set
+    if one_and_done {
+        run(base.to_string(), conf.to_string()).await.unwrap();
+        return;
+    }
 
     let mut sched = JobScheduler::new().await.expect("Couldn't init scheduler");
 
