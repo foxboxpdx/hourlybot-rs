@@ -1,6 +1,6 @@
 [package]
 name = "hourlybot-rs"
-version = "0.3.33"
+version = "0.4.11"
 authors = ["Fox Box <foxboxpdx@gmail.com>"]
 edition = "2021"
 

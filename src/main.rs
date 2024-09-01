@@ -23,6 +23,11 @@ struct Args {
     #[clap(short, long, required_unless_present("dedupe"))]
     config: Option<String>,
 
+    /// Optional alt-text to add to posts
+    /// (default: "An image posted by hourlybot-rs")
+    #[clap(short, long)]
+    alttext: Option<String>,
+
     /// Run the deduper and exit
     #[clap(short, long)]
     dedupe: bool,
@@ -47,7 +52,7 @@ enum Frequency {
 // Perform steps necessary to attach and upload an image, then
 // post a toot pointing to that image.  Try to fail gracefully
 // whenever possible by printing an error and returning.
-async fn run(basedir: String, config: String) -> Result<()> {
+async fn run(basedir: String, config: String, alttext: String) -> Result<()> {
     // Step 1: Build an ImageList.  This should really only
     // have to happen once per execution but tokio-scheduler is a 
     // punk bitch.
@@ -65,9 +70,8 @@ async fn run(basedir: String, config: String) -> Result<()> {
     };
     let mastodon = Mastodon::from(data);
 
-    // If you want there to be a description accompanying the image,
-    // set this to Some(String); otherwise set to None.
-    let description = None;
+    // Masto wants this wrapped in a Some()
+    let description = Some(alttext.to_string());
 
     // Step 4: Try to load the selected image file
     let attach = match mastodon.media(&input, description.clone()).await {
@@ -161,13 +165,20 @@ async fn main() {
     let base = args.basedir.clone();
     let conf = args.config.unwrap().clone();
 
+    // Check for alt text and set a default if not present
+    let alttext = match args.alttext {
+        Some(x) => x.clone(),
+        None => "An image posted by hourlybot-rs".to_string()
+    };
+
     // Startup status
     println!("hourlybot-rs starting up...");
     println!("basedir: {}\nfrequency: {:?}\nconfig file: {}", &base, freq, &conf);
+    println!("alttext: {}", &alttext);
 
     // Hijack execution if OneShot is set
     if one_and_done {
-        run(base.to_string(), conf.to_string()).await.unwrap();
+        run(base.to_string(), conf.to_string(), alttext.to_string()).await.unwrap();
         return;
     }
 
@@ -176,8 +187,9 @@ async fn main() {
     let poster = Job::new_async(freq, move |_uuid, _l| {
         let foo = base.clone();
         let bar = conf.clone();
+        let baz = alttext.clone();
         Box::pin(async move {
-            run(foo, bar).await.unwrap();
+            run(foo, bar, baz).await.unwrap();
         })
     })
     .unwrap();

@@ -7,6 +7,7 @@ A Mastodon bot that can periodically post images
     * Base dir for images
     * Posting frequency - 6 available presets! (Plus a post-once-then-exit option!)
     * Location of Mastodon config file
+    * Alt-text to add to post (Defaults to "an image posted by hourlybot-rs")
 * Maintains a statefile to keep image reposts to a minimum
     * Statefile resets after everything's gotten posted once
     * Stored in /tmp, might make that an option later
@@ -37,4 +38,4 @@ redirect = ""
 token = ""
 ```
 
-hourlybot-rs v0.3.33 17/Feb/2024
+hourlybot-rs v0.4.11 1/Sept/2024
